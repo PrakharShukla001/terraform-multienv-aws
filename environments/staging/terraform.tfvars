@@ -1,7 +1,7 @@
 # ─────────────────────────────────────────
 # STAGING Environment — Close to prod, medium resources
 # ─────────────────────────────────────────
-
+aws_account_id = "397161558687"
 env        = "staging"
 aws_region = "ap-south-1"
 
