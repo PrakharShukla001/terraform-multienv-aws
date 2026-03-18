@@ -1,7 +1,7 @@
 # ─────────────────────────────────────────
 # PROD Environment — High availability, max resources
 # ─────────────────────────────────────────
-
+aws_account_id = "397161558687"
 env        = "prod"
 aws_region = "ap-south-1"
 
