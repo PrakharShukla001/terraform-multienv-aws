@@ -1,0 +1,905 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Terraform Multi-Env AWS Architecture</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600;700&family=Syne:wght@400;600;700;800&display=swap');
+
+  :root {
+    --bg:       #0a0d14;
+    --surface:  #111520;
+    --border:   #1e2535;
+    --accent1:  #7c3aed;
+    --accent2:  #06b6d4;
+    --accent3:  #10b981;
+    --accent4:  #f59e0b;
+    --accent5:  #ef4444;
+    --text:     #e2e8f0;
+    --muted:    #64748b;
+    --glow1:    rgba(124,58,237,0.25);
+    --glow2:    rgba(6,182,212,0.2);
+    --glow3:    rgba(16,185,129,0.2);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    min-height: 100vh;
+    overflow-x: hidden;
+    position: relative;
+  }
+
+  /* Grid background */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(124,58,237,0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(124,58,237,0.04) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* Ambient glow blobs */
+  .glow-blob {
+    position: fixed;
+    border-radius: 50%;
+    filter: blur(120px);
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.35;
+  }
+  .glow-blob.a { width: 500px; height: 500px; top: -100px; left: -100px; background: var(--accent1); }
+  .glow-blob.b { width: 400px; height: 400px; bottom: -80px; right: -80px; background: var(--accent2); }
+  .glow-blob.c { width: 300px; height: 300px; top: 50%; left: 50%; transform: translate(-50%,-50%); background: var(--accent3); }
+
+  .page {
+    position: relative;
+    z-index: 1;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 48px 32px;
+  }
+
+  /* Header */
+  .header {
+    text-align: center;
+    margin-bottom: 48px;
+    animation: fadeDown 0.8s ease both;
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(124,58,237,0.15);
+    border: 1px solid rgba(124,58,237,0.4);
+    border-radius: 999px;
+    padding: 6px 16px;
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    color: #a78bfa;
+    text-transform: uppercase;
+    margin-bottom: 20px;
+  }
+
+  .badge::before { content: '▣'; font-size: 10px; }
+
+  h1 {
+    font-family: 'Syne', sans-serif;
+    font-size: clamp(28px, 4vw, 48px);
+    font-weight: 800;
+    line-height: 1.1;
+    background: linear-gradient(135deg, #e2e8f0 0%, #a78bfa 50%, #22d3ee 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 12px;
+  }
+
+  .subtitle {
+    color: var(--muted);
+    font-size: 13px;
+    letter-spacing: 0.05em;
+  }
+
+  .subtitle span { color: var(--accent3); }
+
+  /* Env comparison row */
+  .env-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin-bottom: 40px;
+    animation: fadeUp 0.8s 0.2s ease both;
+  }
+
+  .env-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 20px;
+    position: relative;
+    overflow: hidden;
+    transition: transform 0.3s, border-color 0.3s;
+  }
+
+  .env-card:hover {
+    transform: translateY(-4px);
+  }
+
+  .env-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+  }
+
+  .env-card.dev::before   { background: var(--accent3); }
+  .env-card.staging::before { background: var(--accent4); }
+  .env-card.prod::before  { background: var(--accent5); }
+
+  .env-card:hover { border-color: var(--border); }
+  .env-card.dev:hover   { border-color: var(--accent3); box-shadow: 0 0 30px rgba(16,185,129,0.15); }
+  .env-card.staging:hover { border-color: var(--accent4); box-shadow: 0 0 30px rgba(245,158,11,0.15); }
+  .env-card.prod:hover  { border-color: var(--accent5); box-shadow: 0 0 30px rgba(239,68,68,0.15); }
+
+  .env-label {
+    font-family: 'Syne', sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+
+  .env-card.dev   .env-label { color: var(--accent3); }
+  .env-card.staging .env-label { color: var(--accent4); }
+  .env-card.prod  .env-label { color: var(--accent5); }
+
+  .env-stat {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    font-size: 11px;
+  }
+
+  .env-stat:last-child { border-bottom: none; }
+  .env-stat .key { color: var(--muted); }
+  .env-stat .val { color: var(--text); font-weight: 600; }
+
+  /* Main Architecture */
+  .arch-title {
+    font-family: 'Syne', sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .arch-title::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  .arch-diagram {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 36px;
+    margin-bottom: 32px;
+    animation: fadeUp 0.8s 0.4s ease both;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .arch-diagram::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse at 50% 0%, rgba(124,58,237,0.06) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  /* Internet row */
+  .inet-row {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 0;
+  }
+
+  .inet-box {
+    background: rgba(100,116,139,0.1);
+    border: 1px dashed rgba(100,116,139,0.4);
+    border-radius: 12px;
+    padding: 12px 32px;
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: 0.08em;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* Arrow */
+  .arrow-down {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin: 4px 0;
+    gap: 0;
+  }
+
+  .arrow-line {
+    width: 2px;
+    height: 28px;
+    background: linear-gradient(to bottom, var(--accent2), var(--accent1));
+    position: relative;
+  }
+
+  .arrow-line::after {
+    content: '▼';
+    position: absolute;
+    bottom: -14px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 10px;
+    color: var(--accent1);
+  }
+
+  /* AWS Region wrapper */
+  .aws-region {
+    border: 1px solid rgba(245,158,11,0.25);
+    border-radius: 20px;
+    padding: 24px;
+    position: relative;
+    background: rgba(245,158,11,0.02);
+    margin: 12px 0;
+  }
+
+  .region-label {
+    position: absolute;
+    top: -10px;
+    left: 20px;
+    background: var(--surface);
+    padding: 2px 12px;
+    font-size: 10px;
+    color: var(--accent4);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    border: 1px solid rgba(245,158,11,0.3);
+    border-radius: 999px;
+  }
+
+  /* Tier rows */
+  .tier {
+    display: flex;
+    justify-content: center;
+    gap: 16px;
+    margin: 8px 0;
+  }
+
+  .tier-box {
+    border-radius: 14px;
+    padding: 14px 20px;
+    font-size: 11px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    min-width: 140px;
+    text-align: center;
+    transition: transform 0.25s, box-shadow 0.25s;
+    cursor: default;
+    border: 1px solid transparent;
+  }
+
+  .tier-box:hover { transform: translateY(-3px); }
+
+  .tier-box .icon { font-size: 22px; }
+  .tier-box .name {
+    font-family: 'Syne', sans-serif;
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: 0.05em;
+  }
+  .tier-box .sub { color: var(--muted); font-size: 10px; }
+
+  /* ALB */
+  .box-alb {
+    background: rgba(124,58,237,0.1);
+    border-color: rgba(124,58,237,0.35);
+    color: #c4b5fd;
+  }
+  .box-alb:hover { box-shadow: 0 0 24px rgba(124,58,237,0.2); border-color: var(--accent1); }
+
+  /* VPC */
+  .vpc-wrap {
+    border: 1px solid rgba(6,182,212,0.2);
+    border-radius: 16px;
+    padding: 20px;
+    position: relative;
+    background: rgba(6,182,212,0.02);
+    margin: 8px 0;
+  }
+
+  .vpc-label {
+    position: absolute;
+    top: -10px; left: 16px;
+    background: var(--surface);
+    padding: 2px 10px;
+    font-size: 10px;
+    color: var(--accent2);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    border: 1px solid rgba(6,182,212,0.25);
+    border-radius: 999px;
+  }
+
+  /* EKS nodes */
+  .box-eks {
+    background: rgba(6,182,212,0.08);
+    border-color: rgba(6,182,212,0.3);
+    color: #67e8f9;
+  }
+  .box-eks:hover { box-shadow: 0 0 24px rgba(6,182,212,0.15); border-color: var(--accent2); }
+
+  /* RDS */
+  .box-rds {
+    background: rgba(16,185,129,0.08);
+    border-color: rgba(16,185,129,0.3);
+    color: #6ee7b7;
+  }
+  .box-rds:hover { box-shadow: 0 0 24px rgba(16,185,129,0.15); border-color: var(--accent3); }
+
+  /* NAT */
+  .box-nat {
+    background: rgba(245,158,11,0.08);
+    border-color: rgba(245,158,11,0.3);
+    color: #fcd34d;
+  }
+  .box-nat:hover { box-shadow: 0 0 24px rgba(245,158,11,0.12); border-color: var(--accent4); }
+
+  /* Security group hint */
+  .sg-ring {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    margin: 6px 0 10px;
+  }
+
+  .sg-badge {
+    font-size: 9px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px dashed;
+  }
+
+  .sg-badge.alb  { color: #a78bfa; border-color: rgba(167,139,250,0.4); }
+  .sg-badge.eks  { color: #67e8f9; border-color: rgba(103,232,249,0.4); }
+  .sg-badge.rds  { color: #6ee7b7; border-color: rgba(110,231,183,0.4); }
+
+  /* CI/CD pipeline */
+  .pipeline {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 28px 24px;
+    margin-bottom: 32px;
+    align-items: center;
+    animation: fadeUp 0.8s 0.6s ease both;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .pipeline::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse at 0% 50%, rgba(6,182,212,0.05) 0%, transparent 60%);
+    pointer-events: none;
+  }
+
+  .pipe-step {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    position: relative;
+    padding: 0 4px;
+  }
+
+  .pipe-step:not(:last-child)::after {
+    content: '──►';
+    position: absolute;
+    right: -18px;
+    top: 50%;
+    transform: translateY(-60%);
+    font-size: 11px;
+    color: var(--accent1);
+    z-index: 1;
+  }
+
+  .pipe-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    border: 1px solid;
+    transition: transform 0.25s;
+  }
+
+  .pipe-step:hover .pipe-icon { transform: scale(1.1); }
+
+  .pipe-icon.github   { background: rgba(139,92,246,0.12); border-color: rgba(139,92,246,0.35); }
+  .pipe-icon.jenkins  { background: rgba(239,68,68,0.1);   border-color: rgba(239,68,68,0.3); }
+  .pipe-icon.docker   { background: rgba(6,182,212,0.1);   border-color: rgba(6,182,212,0.3); }
+  .pipe-icon.scan     { background: rgba(245,158,11,0.1);  border-color: rgba(245,158,11,0.3); }
+  .pipe-icon.eks      { background: rgba(16,185,129,0.1);  border-color: rgba(16,185,129,0.3); }
+  .pipe-icon.monitor  { background: rgba(124,58,237,0.1);  border-color: rgba(124,58,237,0.3); }
+
+  .pipe-name {
+    font-family: 'Syne', sans-serif;
+    font-size: 10px;
+    font-weight: 700;
+    text-align: center;
+    letter-spacing: 0.05em;
+  }
+
+  .pipe-sub { font-size: 9px; color: var(--muted); text-align: center; }
+
+  /* Modules grid */
+  .modules-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 12px;
+    animation: fadeUp 0.8s 0.8s ease both;
+    margin-bottom: 32px;
+  }
+
+  .module-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px 14px;
+    text-align: center;
+    transition: transform 0.25s, border-color 0.25s, box-shadow 0.25s;
+    cursor: default;
+  }
+
+  .module-card:hover {
+    transform: translateY(-4px);
+    border-color: var(--accent1);
+    box-shadow: 0 8px 32px rgba(124,58,237,0.15);
+  }
+
+  .module-card .micon { font-size: 24px; margin-bottom: 8px; }
+  .module-card .mname {
+    font-family: 'Syne', sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    color: #a78bfa;
+    margin-bottom: 6px;
+    letter-spacing: 0.05em;
+  }
+
+  .module-card .mfile {
+    font-size: 9px;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+
+  .mfile .f {
+    display: block;
+    padding: 1px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+  }
+
+  .mfile .f:last-child { border: none; }
+
+  /* Footer */
+  .footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    animation: fadeUp 0.8s 1s ease both;
+  }
+
+  .footer-left { font-size: 11px; color: var(--muted); }
+  .footer-left strong { color: var(--accent2); }
+
+  .footer-right {
+    display: flex;
+    gap: 8px;
+  }
+
+  .tag {
+    font-size: 10px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid;
+    letter-spacing: 0.08em;
+  }
+
+  .tag.tf   { color: #818cf8; border-color: rgba(129,140,248,0.35); }
+  .tag.aws  { color: #fbbf24; border-color: rgba(251,191,36,0.35); }
+  .tag.k8s  { color: #34d399; border-color: rgba(52,211,153,0.35); }
+
+  /* Cost table */
+  .cost-table {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    overflow: hidden;
+    margin-bottom: 32px;
+    animation: fadeUp 0.8s 0.9s ease both;
+  }
+
+  .cost-table-title {
+    padding: 14px 20px;
+    font-family: 'Syne', sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+    background: rgba(255,255,255,0.02);
+  }
+
+  .cost-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr 1fr;
+    padding: 10px 20px;
+    font-size: 11px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    transition: background 0.2s;
+  }
+
+  .cost-row:last-child { border: none; }
+  .cost-row:hover { background: rgba(255,255,255,0.02); }
+
+  .cost-row.head {
+    font-weight: 700;
+    color: var(--muted);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .cost-row .c1 { color: var(--text); }
+  .cost-row .c2 { color: var(--accent3); }
+  .cost-row .c3 { color: var(--accent4); }
+  .cost-row .c4 { color: var(--accent5); }
+
+  /* Animations */
+  @keyframes fadeDown {
+    from { opacity: 0; transform: translateY(-20px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(24px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  /* Pulse on EKS nodes */
+  @keyframes pulse-border {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(6,182,212,0.0); }
+    50%       { box-shadow: 0 0 16px 4px rgba(6,182,212,0.15); }
+  }
+
+  .box-eks { animation: pulse-border 3s infinite; }
+</style>
+</head>
+<body>
+
+<div class="glow-blob a"></div>
+<div class="glow-blob b"></div>
+<div class="glow-blob c"></div>
+
+<div class="page">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="badge">Project 1 — Infrastructure as Code</div>
+    <h1>Terraform Multi-Environment<br>AWS Architecture</h1>
+    <p class="subtitle">By <span>Prakhar Shukla</span> · DevOps Engineer · 3.2 Years Experience</p>
+  </div>
+
+  <!-- Environment Cards -->
+  <div class="arch-title">Environment Comparison</div>
+  <div class="env-row">
+    <div class="env-card dev">
+      <div class="env-label">🟢 Dev</div>
+      <div class="env-stat"><span class="key">VPC CIDR</span><span class="val">10.0.0.0/16</span></div>
+      <div class="env-stat"><span class="key">EKS Node</span><span class="val">t3.small × 1</span></div>
+      <div class="env-stat"><span class="key">Max Nodes</span><span class="val">2</span></div>
+      <div class="env-stat"><span class="key">RDS</span><span class="val">db.t3.micro</span></div>
+      <div class="env-stat"><span class="key">Multi-AZ</span><span class="val">❌ No</span></div>
+      <div class="env-stat"><span class="key">NAT GW</span><span class="val">1 shared</span></div>
+      <div class="env-stat"><span class="key">Est. Cost</span><span class="val">~$30–50/mo</span></div>
+    </div>
+    <div class="env-card staging">
+      <div class="env-label">🟡 Staging</div>
+      <div class="env-stat"><span class="key">VPC CIDR</span><span class="val">10.1.0.0/16</span></div>
+      <div class="env-stat"><span class="key">EKS Node</span><span class="val">t3.medium × 2</span></div>
+      <div class="env-stat"><span class="key">Max Nodes</span><span class="val">4</span></div>
+      <div class="env-stat"><span class="key">RDS</span><span class="val">db.t3.small</span></div>
+      <div class="env-stat"><span class="key">Multi-AZ</span><span class="val">❌ No</span></div>
+      <div class="env-stat"><span class="key">NAT GW</span><span class="val">1 shared</span></div>
+      <div class="env-stat"><span class="key">Est. Cost</span><span class="val">~$80–120/mo</span></div>
+    </div>
+    <div class="env-card prod">
+      <div class="env-label">🔴 Production</div>
+      <div class="env-stat"><span class="key">VPC CIDR</span><span class="val">10.2.0.0/16</span></div>
+      <div class="env-stat"><span class="key">EKS Node</span><span class="val">t3.large × 3</span></div>
+      <div class="env-stat"><span class="key">Max Nodes</span><span class="val">10</span></div>
+      <div class="env-stat"><span class="key">RDS</span><span class="val">db.t3.medium</span></div>
+      <div class="env-stat"><span class="key">Multi-AZ</span><span class="val">✅ Yes</span></div>
+      <div class="env-stat"><span class="key">NAT GW</span><span class="val">2 (HA)</span></div>
+      <div class="env-stat"><span class="key">Est. Cost</span><span class="val">~$250–400/mo</span></div>
+    </div>
+  </div>
+
+  <!-- Architecture Diagram -->
+  <div class="arch-title">AWS Infrastructure Architecture</div>
+  <div class="arch-diagram">
+
+    <!-- Internet -->
+    <div class="inet-row">
+      <div class="inet-box">🌐 Internet / Users</div>
+    </div>
+
+    <div class="arrow-down"><div class="arrow-line"></div></div>
+
+    <!-- AWS Region -->
+    <div class="aws-region">
+      <div class="region-label">☁️ AWS ap-south-1</div>
+
+      <!-- ALB -->
+      <div class="tier">
+        <div class="tier-box box-alb">
+          <span class="icon">⚖️</span>
+          <span class="name">ALB</span>
+          <span class="sub">HTTP → HTTPS redirect<br>TLS 1.3 · Access Logs → S3</span>
+        </div>
+      </div>
+
+      <div class="sg-ring">
+        <div class="sg-badge alb">SG: ALB — port 80/443 open</div>
+      </div>
+
+      <div class="arrow-down"><div class="arrow-line"></div></div>
+
+      <!-- VPC -->
+      <div class="vpc-wrap">
+        <div class="vpc-label">🔷 VPC — Private + Public Subnets</div>
+
+        <!-- Public tier: NAT -->
+        <div class="tier" style="margin-top:12px;">
+          <div class="tier-box box-nat">
+            <span class="icon">🔀</span>
+            <span class="name">NAT Gateway</span>
+            <span class="sub">Public Subnet<br>Prod: 2 (HA)</span>
+          </div>
+          <div class="tier-box box-alb" style="opacity:0.6;">
+            <span class="icon">📋</span>
+            <span class="name">Route Tables</span>
+            <span class="sub">Public + Private<br>routes defined</span>
+          </div>
+        </div>
+
+        <div class="arrow-down"><div class="arrow-line"></div></div>
+
+        <!-- EKS -->
+        <div class="sg-ring">
+          <div class="sg-badge eks">SG: EKS Cluster — port 443 from nodes</div>
+          <div class="sg-badge eks">SG: Nodes — self + ALB → 1025-65535</div>
+        </div>
+
+        <div class="tier">
+          <div class="tier-box box-eks">
+            <span class="icon">☸️</span>
+            <span class="name">EKS Cluster</span>
+            <span class="sub">K8s 1.28<br>Private API</span>
+          </div>
+          <div class="tier-box box-eks">
+            <span class="icon">🖥️</span>
+            <span class="name">Node Group 1</span>
+            <span class="sub">Private Subnet AZ-a<br>IAM Role attached</span>
+          </div>
+          <div class="tier-box box-eks">
+            <span class="icon">🖥️</span>
+            <span class="name">Node Group 2</span>
+            <span class="sub">Private Subnet AZ-b<br>IAM Role attached</span>
+          </div>
+        </div>
+
+        <div class="arrow-down"><div class="arrow-line"></div></div>
+
+        <!-- RDS -->
+        <div class="sg-ring">
+          <div class="sg-badge rds">SG: RDS — port 3306 from EKS nodes only</div>
+        </div>
+
+        <div class="tier">
+          <div class="tier-box box-rds">
+            <span class="icon">🗄️</span>
+            <span class="name">RDS Primary</span>
+            <span class="sub">MySQL 8.0<br>Private Subnet · Encrypted</span>
+          </div>
+          <div class="tier-box box-rds" style="opacity:0.55;">
+            <span class="icon">🗄️</span>
+            <span class="name">RDS Standby</span>
+            <span class="sub">Multi-AZ replica<br>Prod only · Auto failover</span>
+          </div>
+        </div>
+
+      </div><!-- /vpc-wrap -->
+    </div><!-- /aws-region -->
+  </div><!-- /arch-diagram -->
+
+  <!-- CI/CD Pipeline -->
+  <div class="arch-title">CI/CD Pipeline Flow</div>
+  <div class="pipeline">
+    <div class="pipe-step">
+      <div class="pipe-icon github">🐙</div>
+      <div class="pipe-name">GitHub</div>
+      <div class="pipe-sub">Push / PR trigger</div>
+    </div>
+    <div class="pipe-step">
+      <div class="pipe-icon jenkins">🏗️</div>
+      <div class="pipe-name">Jenkins</div>
+      <div class="pipe-sub">tf init + validate</div>
+    </div>
+    <div class="pipe-step">
+      <div class="pipe-icon scan">📋</div>
+      <div class="pipe-name">TF Plan</div>
+      <div class="pipe-sub">Preview changes</div>
+    </div>
+    <div class="pipe-step">
+      <div class="pipe-icon docker">✅</div>
+      <div class="pipe-name">Approval</div>
+      <div class="pipe-sub">Manual gate (prod)</div>
+    </div>
+    <div class="pipe-step">
+      <div class="pipe-icon eks">🚀</div>
+      <div class="pipe-name">TF Apply</div>
+      <div class="pipe-sub">Infra deployed</div>
+    </div>
+    <div class="pipe-step">
+      <div class="pipe-icon monitor">📤</div>
+      <div class="pipe-name">Outputs</div>
+      <div class="pipe-sub">Saved to S3 state</div>
+    </div>
+  </div>
+
+  <!-- Terraform Modules -->
+  <div class="arch-title">Terraform Modules</div>
+  <div class="modules-grid">
+    <div class="module-card">
+      <div class="micon">🌐</div>
+      <div class="mname">vpc</div>
+      <div class="mfile">
+        <span class="f">main.tf</span>
+        <span class="f">variables.tf</span>
+        <span class="f">outputs.tf</span>
+        <span class="f">VPC · IGW · Subnets</span>
+        <span class="f">NAT GW · Routes</span>
+      </div>
+    </div>
+    <div class="module-card">
+      <div class="micon">☸️</div>
+      <div class="mname">eks</div>
+      <div class="mfile">
+        <span class="f">main.tf</span>
+        <span class="f">variables.tf</span>
+        <span class="f">outputs.tf</span>
+        <span class="f">Cluster · Node Group</span>
+        <span class="f">IAM Roles</span>
+      </div>
+    </div>
+    <div class="module-card">
+      <div class="micon">🗄️</div>
+      <div class="mname">rds</div>
+      <div class="mfile">
+        <span class="f">main.tf</span>
+        <span class="f">variables.tf</span>
+        <span class="f">outputs.tf</span>
+        <span class="f">MySQL 8.0</span>
+        <span class="f">Multi-AZ · Encrypted</span>
+      </div>
+    </div>
+    <div class="module-card">
+      <div class="micon">⚖️</div>
+      <div class="mname">alb</div>
+      <div class="mfile">
+        <span class="f">main.tf</span>
+        <span class="f">variables.tf</span>
+        <span class="f">outputs.tf</span>
+        <span class="f">ALB · TG · Listeners</span>
+        <span class="f">S3 Access Logs</span>
+      </div>
+    </div>
+    <div class="module-card">
+      <div class="micon">🔒</div>
+      <div class="mname">security-groups</div>
+      <div class="mfile">
+        <span class="f">main.tf</span>
+        <span class="f">variables.tf</span>
+        <span class="f">outputs.tf</span>
+        <span class="f">ALB · EKS · Nodes</span>
+        <span class="f">RDS SGs</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Cost Table -->
+  <div class="arch-title">AWS Cost Estimate</div>
+  <div class="cost-table">
+    <div class="cost-table-title">Monthly Resource Cost Breakdown</div>
+    <div class="cost-row head">
+      <span>Resource</span><span>Dev</span><span>Staging</span><span>Prod</span>
+    </div>
+    <div class="cost-row">
+      <span class="c1">EKS Cluster</span>
+      <span class="c2">$10</span><span class="c3">$10</span><span class="c4">$10</span>
+    </div>
+    <div class="cost-row">
+      <span class="c1">EC2 Nodes</span>
+      <span class="c2">~$15</span><span class="c3">~$45</span><span class="c4">~$140</span>
+    </div>
+    <div class="cost-row">
+      <span class="c1">RDS MySQL</span>
+      <span class="c2">~$15</span><span class="c3">~$30</span><span class="c4">~$80</span>
+    </div>
+    <div class="cost-row">
+      <span class="c1">NAT Gateway</span>
+      <span class="c2">~$5</span><span class="c3">~$5</span><span class="c4">~$10</span>
+    </div>
+    <div class="cost-row">
+      <span class="c1">ALB + Data</span>
+      <span class="c2">—</span><span class="c3">~$20</span><span class="c4">~$30</span>
+    </div>
+    <div class="cost-row" style="font-weight:700; background: rgba(255,255,255,0.02);">
+      <span class="c1">TOTAL</span>
+      <span class="c2">~$45</span><span class="c3">~$110</span><span class="c4">~$270</span>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <div class="footer-left">
+      <strong>Prakhar Shukla</strong> · <a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="2f5f5d4e44474e5d5c475a44434e5b4a4c476f48424e4643014c4042">[email&#160;protected]</a><br>
+      github.com/PrakharShukla001
+    </div>
+    <div class="footer-right">
+      <div class="tag tf">Terraform 1.6</div>
+    

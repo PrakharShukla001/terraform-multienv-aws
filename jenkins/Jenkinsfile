@@ -1,0 +1,152 @@
+pipeline {
+    agent any
+
+    parameters {
+        choice(
+            name: 'ENVIRONMENT',
+            choices: ['dev', 'staging', 'prod'],
+            description: 'Select the target environment'
+        )
+        choice(
+            name: 'ACTION',
+            choices: ['plan', 'apply', 'destroy'],
+            description: 'Terraform action to perform'
+        )
+    }
+
+    environment {
+        AWS_ACCESS_KEY_ID     = credentials('aws-access-key')
+        AWS_SECRET_ACCESS_KEY = credentials('aws-secret-key')
+        AWS_DEFAULT_REGION    = 'ap-south-1'
+        TF_DIR                = "environments/${params.ENVIRONMENT}"
+    }
+
+    stages {
+
+        stage('🔍 Checkout Code') {
+            steps {
+                checkout scm
+                echo "Branch: ${env.BRANCH_NAME}"
+                echo "Environment: ${params.ENVIRONMENT}"
+                echo "Action: ${params.ACTION}"
+            }
+        }
+
+        stage('🔒 Validate — No Destroy on Prod') {
+            steps {
+                script {
+                    if (params.ENVIRONMENT == 'prod' && params.ACTION == 'destroy') {
+                        error("❌ DESTROY on PROD is NOT allowed via Jenkins!")
+                    }
+                }
+            }
+        }
+
+        stage('⚙️ Terraform Init') {
+            steps {
+                sh """
+                    cd ${TF_DIR}
+                    terraform init -reconfigure
+                """
+            }
+        }
+
+        stage('✅ Terraform Validate') {
+            steps {
+                sh """
+                    cd ${TF_DIR}
+                    terraform validate
+                """
+            }
+        }
+
+        stage('📋 Terraform Plan') {
+            steps {
+                sh """
+                    cd ${TF_DIR}
+                    terraform plan \
+                      -var-file=terraform.tfvars \
+                      -out=tfplan \
+                      -detailed-exitcode || true
+                """
+            }
+            post {
+                always {
+                    sh "cd ${TF_DIR} && terraform show -no-color tfplan > plan_output.txt || true"
+                    archiveArtifacts artifacts: "${TF_DIR}/plan_output.txt", allowEmptyArchive: true
+                }
+            }
+        }
+
+        stage('⚠️ Approval Gate (Staging & Prod)') {
+            when {
+                expression {
+                    params.ACTION == 'apply' &&
+                    (params.ENVIRONMENT == 'staging' || params.ENVIRONMENT == 'prod')
+                }
+            }
+            steps {
+                script {
+                    def approver = input(
+                        message: "🚀 Apply Terraform to ${params.ENVIRONMENT.toUpperCase()}?",
+                        ok: 'Approve & Apply!',
+                        submitterParameter: 'APPROVER'
+                    )
+                    echo "Approved by: ${approver}"
+                }
+            }
+        }
+
+        stage('🚀 Terraform Apply') {
+            when {
+                expression { params.ACTION == 'apply' }
+            }
+            steps {
+                sh """
+                    cd ${TF_DIR}
+                    terraform apply -auto-approve tfplan
+                """
+            }
+        }
+
+        stage('💥 Terraform Destroy') {
+            when {
+                expression { params.ACTION == 'destroy' }
+            }
+            steps {
+                sh """
+                    cd ${TF_DIR}
+                    terraform destroy \
+                      -var-file=terraform.tfvars \
+                      -auto-approve
+                """
+            }
+        }
+
+        stage('📤 Save Outputs') {
+            when {
+                expression { params.ACTION == 'apply' }
+            }
+            steps {
+                sh """
+                    cd ${TF_DIR}
+                    terraform output -json > terraform_outputs.json
+                    cat terraform_outputs.json
+                """
+                archiveArtifacts artifacts: "${TF_DIR}/terraform_outputs.json"
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ Terraform ${params.ACTION} on ${params.ENVIRONMENT} completed!"
+        }
+        failure {
+            echo "❌ Terraform ${params.ACTION} FAILED on ${params.ENVIRONMENT}!"
+        }
+        always {
+            cleanWs()
+        }
+    }
+}
