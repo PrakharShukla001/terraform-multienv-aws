@@ -1,7 +1,7 @@
 # ─────────────────────────────────────────
 # DEV Environment — Minimal resources, low cost
 # ─────────────────────────────────────────
-
+aws_account_id = "397161558687"
 env        = "dev"
 aws_region = "ap-south-1"
 
